@@ -66,7 +66,7 @@ You’ll hear the AI speak and can respond via your microphone in a continuous l
 
 ```
 .
-├── index.js          # Main logic
+├── main.js          # Main logic
 ├── README.md         # This file
 ```
 
