@@ -41,7 +41,11 @@ GOOGLE_API_KEY=YOUR_API_KEY_HERE
 ## ▶️ Running the App
 
 ```bash
-node index.js
+npm start
+```
+or 
+```bash
+node main.js
 ```
 
 You’ll hear the AI speak and can respond via your microphone in a continuous loop.
