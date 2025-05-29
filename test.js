@@ -6,15 +6,15 @@ import {
   MediaResolution
 } from '@google/genai';
 import mic from 'node-mic';
-import { Readable } from 'stream';
 import Speaker from 'speaker';
 
 let responseQueue = [];
 let session = undefined;
-let audioStream;
 let systemSpeaker;
+let audioChunksForCurrentTurn = [];
+let isProcessingTurn = false;
 
-// helper to (re)create a fresh audio pipeline
+// Create a single, persistent audio pipeline
 function createAudioPipeline() {
   systemSpeaker = new Speaker({
     channels: 1,
@@ -22,24 +22,30 @@ function createAudioPipeline() {
     sampleRate: 24000,
     signed: true
   });
-  audioStream = new Readable({
-    read() {}
-  });
-  audioStream.pipe(systemSpeaker);
+  
+  console.log('Audio pipeline created');
 }
 
-
 async function handleTurn() {
+  isProcessingTurn = true;
+  audioChunksForCurrentTurn = [];
+  
   const turn = [];
   let done = false;
+  
   while (!done) {
     const message = await waitMessage();
     turn.push(message);
-    console.log(message.serverContent?.modelTurn?.parts?.[0])
-    /* if (message.serverContent && message.serverContent.turnComplete) {
+    
+    // Check if this is the end of the turn
+    if (message.serverContent && message.serverContent.turnComplete) {
       done = true;
-    }*/
+      console.log('Turn complete - playing collected audio');
+      await playCollectedAudio();
+    }
   }
+  
+  isProcessingTurn = false;
   return turn;
 }
 
@@ -52,7 +58,7 @@ async function waitMessage() {
       handleModelTurn(message);
       done = true;
     } else {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
   return message;
@@ -69,19 +75,77 @@ function handleModelTurn(message) {
     if (part?.inlineData) {
       const inlineData = part?.inlineData;
       const buffer = Buffer.from(inlineData.data, 'base64');
-          
-      audioStream.push(buffer);
+      
+      // Collect audio chunks for this turn
+      audioChunksForCurrentTurn.push(buffer);
+      console.log(`Collected audio chunk: ${buffer.length} bytes`);
     }
 
     if(part?.text) {
-      console.log(part?.text);
+      console.log('Text:', part?.text);
     }
   }
 }
 
+async function playCollectedAudio() {
+  if (audioChunksForCurrentTurn.length === 0) {
+    console.log('No audio to play');
+    return;
+  }
+  
+  console.log(`Playing ${audioChunksForCurrentTurn.length} audio chunks`);
+  
+  // Combine all audio chunks into one buffer
+  const totalAudio = Buffer.concat(audioChunksForCurrentTurn);
+  console.log(`Total audio buffer size: ${totalAudio.length} bytes`);
+  
+  // Create a new speaker for this audio playback
+  const speaker = new Speaker({
+    channels: 1,
+    bitDepth: 16,
+    sampleRate: 24000,
+    signed: true
+  });
+  
+  return new Promise((resolve) => {
+    let written = false;
+    
+    speaker.on('open', () => {
+      console.log('Speaker opened, writing audio...');
+      if (!written) {
+        written = true;
+        speaker.write(totalAudio);
+        speaker.end();
+      }
+    });
+    
+    speaker.on('close', () => {
+      console.log('Audio playback finished');
+      resolve();
+    });
+    
+    speaker.on('error', (err) => {
+      console.error('Speaker error:', err);
+      resolve();
+    });
+    
+    // Fallback timeout
+    setTimeout(() => {
+      if (!written) {
+        console.log('Timeout - forcing audio write');
+        written = true;
+        speaker.write(totalAudio);
+        speaker.end();
+      }
+    }, 100);
+    
+    // Additional safety timeout
+    setTimeout(resolve, 10000);
+  });
+}
+
 async function main() {
-  console.log('Setting up audio playback system...');
-  createAudioPipeline();
+  console.log('Setting up audio system...');
   
   const ai = new GoogleGenAI({
     apiKey: 'AIzaSyB6LMTe4Ynn8ivchJpXBvLiCe3_5pE_eAE',
@@ -111,27 +175,36 @@ async function main() {
     model,
     callbacks: {
       onopen: function () {
-        console.debug('Opened');
+        console.log('Session opened');
       },
       onmessage: function (message) {
        responseQueue.push(message);
       },
       onerror: function (e) {
-        console.debug('Error:', e.message);
+        console.error('Session error:', e.message);
       },
       onclose: function (e) {
-        console.debug('Close:', e.reason);
+        console.log('Session closed:', e.reason);
       },
     },
     config
   });
   
-  // Set up microphone recording with appropriate parameters
+  // Set up microphone recording
   setupMicrophone(session);
 
-  await handleTurn();
-  /*while(true) {
-  }*/
+  // Handle conversation turns
+  console.log('Starting conversation loop...');
+  while(true) {
+    try {
+      await handleTurn();
+      // Brief pause between turns
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch(error) {
+      console.error('Error in turn handling:', error);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
 }
 
 /**
@@ -144,40 +217,31 @@ function setupMicrophone(session) {
     rate: '16000',
     channels: '1',
     debug: false,
-    exitOnSilence: -1, // Don't exit on silence
-    fileType: 'raw' // Get raw PCM data
+    exitOnSilence: -1,
+    fileType: 'raw'
   });
 
-  // Get the microphone input stream
   const micStream = microphone.getAudioStream();
   let audioChunks = [];
   let processingInterval = null;
 
-  // Process microphone data
   micStream.on('data', (data) => {
-    // Add the new data to our chunks
     audioChunks.push(data);
   });
 
-  // Handle errors
   micStream.on('error', (err) => {
     console.error('Microphone Error:', err);
   });
 
-  // Start the microphone
   microphone.start();
-  console.log('Microphone recording started...');
+  console.log('Microphone started');
 
-  // Set up a function to process and send audio chunks every 100ms
+  // Send audio data every 100ms
   processingInterval = setInterval(() => {
     if (audioChunks.length > 0) {
-      // Combine all chunks
       const buffer = Buffer.concat(audioChunks);
-      
-      // Convert to base64
       const base64Audio = buffer.toString('base64');
       
-      // Send to API
       session.sendRealtimeInput({
         audio: {
           data: base64Audio,
@@ -185,22 +249,21 @@ function setupMicrophone(session) {
         }
       });
       
-      // Clear chunks for next interval
       audioChunks = [];
     }
-  }, 100); // Process every 100ms
+  }, 100);
 
-  // Setup cleanup function
+  // Cleanup on exit
   process.on('SIGINT', () => {
+    console.log('Cleaning up...');
     if (processingInterval) {
       clearInterval(processingInterval);
     }
     microphone.stop();
-    console.log('Microphone recording stopped');
     process.exit();
   });
 
   return microphone;
 }
 
-main();
+main().catch(console.error);
