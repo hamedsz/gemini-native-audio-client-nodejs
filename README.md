@@ -83,7 +83,7 @@ You’ll hear the AI speak and can respond via your microphone in a continuous l
 ## 🧠 Requirements
 
 * Node.js 18+
-* macOS, Linux, or WSL with microphone access
+* macOS, Linux, or Windows with microphone access
 * Internet connection for Gemini API
 
 ---
