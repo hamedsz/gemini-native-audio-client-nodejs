@@ -4,7 +4,6 @@
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
-    "mime": "^4.0.7",
     "node-mic": "^1.0.1",
     "speaker": "^0.5.5"
   },
