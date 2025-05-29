@@ -2,8 +2,12 @@
   "devDependencies": {
     "@types/node": "^22.15.21"
   },
+  "scripts": {
+    "start": "node main.js"
+  },
   "dependencies": {
     "@google/genai": "^1.0.0",
+    "dotenv": "^16.5.0",
     "node-mic": "^1.0.1",
     "speaker": "^0.5.5"
   },

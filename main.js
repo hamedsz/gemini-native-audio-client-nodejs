@@ -8,6 +8,8 @@ import {
 import mic from 'node-mic';
 import Speaker from 'speaker';
 import { Readable } from 'stream';
+import dotenv from 'dotenv';
+dotenv.config();
 
 let responseQueue = [];
 let session = undefined;
@@ -153,7 +155,7 @@ async function main() {
   console.log('Setting up real-time audio system...');
   
   const ai = new GoogleGenAI({
-    apiKey: 'AIzaSyBcwQI7aPDXPTFZu7m8Rp_Em1TtwOURIvE',
+    apiKey: process.env.GOOGLE_API_KEY,
   });
 
   const model = 'models/gemini-2.5-flash-preview-native-audio-dialog';
