@@ -7,31 +7,57 @@ import {
 } from '@google/genai';
 import mic from 'node-mic';
 import Speaker from 'speaker';
+import { Readable } from 'stream';
 
 let responseQueue = [];
 let session = undefined;
-let systemSpeaker;
-let audioChunksForCurrentTurn = [];
-let isProcessingTurn = false;
+let currentSpeaker = null;
+let currentAudioStream = null;
+let isPlayingAudio = false;
 
-// Create a single, persistent audio pipeline
+// Create audio pipeline for immediate streaming
 function createAudioPipeline() {
-  systemSpeaker = new Speaker({
+  // Clean up existing pipeline
+  if (currentAudioStream) {
+    currentAudioStream.destroy();
+  }
+  if (currentSpeaker) {
+    currentSpeaker.destroy();
+  }
+  
+  currentSpeaker = new Speaker({
     channels: 1,
     bitDepth: 16,
     sampleRate: 24000,
     signed: true
   });
   
-  console.log('Audio pipeline created');
+  currentAudioStream = new Readable({
+    read() {}
+  });
+  
+  currentAudioStream.pipe(currentSpeaker);
+  
+  currentSpeaker.on('close', () => {
+    console.log('Audio playback finished');
+    isPlayingAudio = false;
+  });
+  
+  currentSpeaker.on('error', (err) => {
+    console.error('Speaker error:', err);
+    isPlayingAudio = false;
+  });
+  
+  isPlayingAudio = true;
+  turnComplete = false;
+  
+  console.log('Audio pipeline created and ready');
 }
 
 async function handleTurn() {
-  isProcessingTurn = true;
-  audioChunksForCurrentTurn = [];
-  
   const turn = [];
   let done = false;
+  turnComplete = false;
   
   while (!done) {
     const message = await waitMessage();
@@ -39,13 +65,15 @@ async function handleTurn() {
     
     // Check if this is the end of the turn
     if (message.serverContent && message.serverContent.turnComplete) {
+      turnComplete = true;
+      console.log('Turn complete - finalizing audio stream');
+      finalizeAudioStream();
       done = true;
-      console.log('Turn complete - playing collected audio');
-      await playCollectedAudio();
     }
   }
   
-  isProcessingTurn = false;
+  // Wait for audio to finish playing
+  await waitForAudioToFinish();
   return turn;
 }
 
@@ -58,7 +86,7 @@ async function waitMessage() {
       handleModelTurn(message);
       done = true;
     } else {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
   return message;
@@ -76,9 +104,16 @@ function handleModelTurn(message) {
       const inlineData = part?.inlineData;
       const buffer = Buffer.from(inlineData.data, 'base64');
       
-      // Collect audio chunks for this turn
-      audioChunksForCurrentTurn.push(buffer);
-      console.log(`Collected audio chunk: ${buffer.length} bytes`);
+      // Start audio pipeline if this is the first chunk
+      if (!isPlayingAudio) {
+        createAudioPipeline();
+      }
+      
+      // Stream audio immediately
+      if (currentAudioStream && !currentAudioStream.destroyed) {
+        currentAudioStream.push(buffer);
+        console.log(`Streamed audio chunk: ${buffer.length} bytes`);
+      }
     }
 
     if(part?.text) {
@@ -87,68 +122,38 @@ function handleModelTurn(message) {
   }
 }
 
-async function playCollectedAudio() {
-  if (audioChunksForCurrentTurn.length === 0) {
-    console.log('No audio to play');
-    return;
+function finalizeAudioStream() {
+  if (currentAudioStream && !currentAudioStream.destroyed) {
+    // Signal end of stream
+    currentAudioStream.push(null);
+    console.log('Audio stream finalized');
   }
-  
-  console.log(`Playing ${audioChunksForCurrentTurn.length} audio chunks`);
-  
-  // Combine all audio chunks into one buffer
-  const totalAudio = Buffer.concat(audioChunksForCurrentTurn);
-  console.log(`Total audio buffer size: ${totalAudio.length} bytes`);
-  
-  // Create a new speaker for this audio playback
-  const speaker = new Speaker({
-    channels: 1,
-    bitDepth: 16,
-    sampleRate: 24000,
-    signed: true
-  });
+}
+
+async function waitForAudioToFinish() {
+  if (!isPlayingAudio) return;
   
   return new Promise((resolve) => {
-    let written = false;
-    
-    speaker.on('open', () => {
-      console.log('Speaker opened, writing audio...');
-      if (!written) {
-        written = true;
-        speaker.write(totalAudio);
-        speaker.end();
+    const checkInterval = setInterval(() => {
+      if (!isPlayingAudio || (currentSpeaker && currentSpeaker.destroyed)) {
+        clearInterval(checkInterval);
+        resolve();
       }
-    });
+    }, 50);
     
-    speaker.on('close', () => {
-      console.log('Audio playback finished');
-      resolve();
-    });
-    
-    speaker.on('error', (err) => {
-      console.error('Speaker error:', err);
-      resolve();
-    });
-    
-    // Fallback timeout
+    // Fallback timeout to prevent hanging
     setTimeout(() => {
-      if (!written) {
-        console.log('Timeout - forcing audio write');
-        written = true;
-        speaker.write(totalAudio);
-        speaker.end();
-      }
-    }, 100);
-    
-    // Additional safety timeout
-    setTimeout(resolve, 10000);
+      clearInterval(checkInterval);
+      resolve();
+    }, 30000); // 30 second max wait
   });
 }
 
 async function main() {
-  console.log('Setting up audio system...');
+  console.log('Setting up real-time audio system...');
   
   const ai = new GoogleGenAI({
-    apiKey: 'AIzaSyB6LMTe4Ynn8ivchJpXBvLiCe3_5pE_eAE',
+    apiKey: 'AIzaSyBcwQI7aPDXPTFZu7m8Rp_Em1TtwOURIvE',
   });
 
   const model = 'models/gemini-2.5-flash-preview-native-audio-dialog';
@@ -175,7 +180,7 @@ async function main() {
     model,
     callbacks: {
       onopen: function () {
-        console.log('Session opened');
+        console.log('Session opened - ready for real-time conversation');
       },
       onmessage: function (message) {
        responseQueue.push(message);
@@ -194,14 +199,16 @@ async function main() {
   setupMicrophone(session);
 
   // Handle conversation turns
-  console.log('Starting conversation loop...');
+  console.log('Starting real-time conversation...');
   while(true) {
     try {
       await handleTurn();
-      // Brief pause between turns
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Very brief pause between turns for cleanup
+      await new Promise(resolve => setTimeout(resolve, 100));
     } catch(error) {
       console.error('Error in turn handling:', error);
+      // Reset audio state on error
+      isPlayingAudio = false;
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
@@ -212,7 +219,6 @@ async function main() {
  * @param {Object} session - The active Gemini session
  */
 function setupMicrophone(session) {
-  // Create a microphone instance
   const microphone = new mic({
     rate: '16000',
     channels: '1',
@@ -234,9 +240,9 @@ function setupMicrophone(session) {
   });
 
   microphone.start();
-  console.log('Microphone started');
+  console.log('Microphone started - speak now!');
 
-  // Send audio data every 100ms
+  // Send audio data every 100ms for real-time interaction
   processingInterval = setInterval(() => {
     if (audioChunks.length > 0) {
       const buffer = Buffer.concat(audioChunks);
@@ -260,6 +266,9 @@ function setupMicrophone(session) {
       clearInterval(processingInterval);
     }
     microphone.stop();
+    if (currentSpeaker) {
+      currentSpeaker.destroy();
+    }
     process.exit();
   });
 

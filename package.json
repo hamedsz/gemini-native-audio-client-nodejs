@@ -6,10 +6,7 @@
     "@google/genai": "^1.0.0",
     "mime": "^4.0.7",
     "node-mic": "^1.0.1",
-    "speaker": "^0.5.5",
-    "wav": "^1.0.2",
-    "wavefile": "^11.0.0",
-    "web-audio-api": "^0.2.2"
+    "speaker": "^0.5.5"
   },
   "type": "module"
 }
